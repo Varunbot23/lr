@@ -16,20 +16,23 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import joblib
+import streamlit as st, sys, os
+st.write("✅ App started, Python:", sys.version)
+st.write("Files in working dir:", os.listdir(Path(__file__).parent))
+
 
 st.set_page_config(page_title="Dropout Risk Predictor", layout="centered")
 
 # ---------- Load model ----------
 @st.cache_resource
 def load_model():
+    import joblib
+    from pathlib import Path
     model_path = Path(__file__).parent / "logistic_regression_pipeline.pkl"
     if not model_path.exists():
-        st.error(f"Model file not found at: {model_path}")
+        st.error(f"Model not found at {model_path}")
         st.stop()
-    model = joblib.load(model_path)
-    return model
-
-model = load_model()
+    return joblib.load(model_path)
 
 # Try to fetch the raw feature names the pipeline was trained on
 RAW_COLS = None
@@ -616,4 +619,5 @@ with st.expander("📥 Batch predictions from CSV"):
                                file_name="predictions.csv", mime="text/csv")
         except Exception as e:
             st.error(f"Batch prediction failed: {e}")
+
 
