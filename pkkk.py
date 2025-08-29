@@ -9,7 +9,160 @@ import streamlit as st
 
 # Prefer joblib for sklearn models; fall back to pickle if unavailable
 try:
-    import joblib
+    import joblib# pkkk.py — Streamlit app for Dropout Risk (LogReg pipeline)
+import os
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import streamlit as st
+import joblib
+
+st.set_page_config(page_title="Dropout Risk Predictor", layout="centered")
+
+# ---------- Load model ----------
+@st.cache_resource
+def load_model():
+    model_path = Path(__file__).parent / "logistic_regression_pipeline.pkl"
+    if not model_path.exists():
+        st.error(f"Model file not found at: {model_path}")
+        st.stop()
+    model = joblib.load(model_path)
+    return model
+
+model = load_model()
+
+# Try to fetch the raw feature names the pipeline was trained on
+RAW_COLS = None
+try:
+    # assumes your ColumnTransformer is named "prep" in the pipeline
+    RAW_COLS = list(model.named_steps["prep"].feature_names_in_)
+except Exception:
+    st.error("Could not read raw feature names from pipeline step 'prep'. "
+             "Ensure you saved a Pipeline(prep, clf) and the step is named 'prep'.")
+    st.stop()
+
+# ---------- Sidebar: app info ----------
+with st.sidebar:
+    st.header("About")
+    st.write(
+        "This app loads a **Logistic Regression pipeline** and predicts student dropout risk. "
+        "All preprocessing (imputation, scaling, one-hot) happens *inside* the pipeline."
+    )
+    with st.expander("Debug info"):
+        import sklearn, pandas, numpy, sys
+        st.write("Python:", sys.version.split()[0])
+        st.write("scikit-learn:", sklearn.__version__)
+        st.write("pandas:", pandas.__version__)
+        st.write("numpy:", numpy.__version__)
+        st.write("Expected raw columns:", RAW_COLS)
+
+# ---------- Helpers ----------
+def build_input_row(raw_cols: list[str], values: dict) -> pd.DataFrame:
+    """
+    Build a single-row DataFrame with exactly the columns the pipeline expects.
+    Missing keys default to np.nan (imputer will handle).
+    """
+    row = {col: values.get(col, np.nan) for col in raw_cols}
+    return pd.DataFrame([row], columns=raw_cols)
+
+def show_result(prob: float, threshold: float):
+    pred = int(prob >= threshold)
+    st.metric("Dropout probability", f"{prob:.2%}")
+    st.write("Predicted class:", "Dropout" if pred == 1 else "No Dropout")
+    if pred == 1:
+        st.info("💡 Tip: Increase study hours, reduce stress, and improve attendance to reduce risk.")
+    else:
+        st.success("👍 Low risk. Keep consistent attendance and study routines.")
+
+# ---------- Main UI ----------
+st.title("🎓 Dropout Risk Predictor")
+
+st.subheader("Single Student Prediction")
+st.caption("Enter raw values (the pipeline will encode them internally).")
+
+# NOTE: Adjust these widgets *names* to match your training RAW_COLS exactly.
+# Below are common fields found in your project; rename/remove/add to match RAW_COLS.
+# For any column in RAW_COLS not present here, the app will pass NaN (and your imputer will fill).
+# Numeric
+age = st.number_input("Age", min_value=15, max_value=70, value=21)
+attendance = st.slider("Attendance (%)", min_value=0, max_value=100, value=85)
+midterm = st.number_input("Midterm_Score", min_value=0, max_value=100, value=60)
+assignments = st.number_input("Assignments_Avg", min_value=0, max_value=100, value=65)
+quizzes = st.number_input("Quizzes_Avg", min_value=0, max_value=100, value=62)
+participation = st.number_input("Participation_Score", min_value=0, max_value=100, value=55)
+projects = st.number_input("Projects_Score", min_value=0, max_value=100, value=58)
+study_hours = st.slider("Study_Hours_per_Week", min_value=0, max_value=80, value=12)
+stress = st.slider("Stress_Level (1-10)", min_value=1, max_value=10, value=5)
+sleep = st.slider("Sleep_Hours_per_Night", min_value=0, max_value=14, value=7)
+
+# Categoricals (keep raw labels as trained; e.g., "Male"/"Female", "Yes"/"No")
+gender = st.selectbox("Gender", ["Male", "Female"])
+dept = st.selectbox("Department", ["CS", "IT", "ECE", "MECH", "CIVIL"])
+extra = st.selectbox("Extracurricular_Activities", ["Yes", "No"])
+internet = st.selectbox("Internet_Access_at_Home", ["Yes", "No"])
+parent_edu = st.selectbox("Parent_Education_Level", ["Primary", "Secondary", "Graduate", "Postgraduate"])
+income = st.selectbox("Family_Income_Level", ["Low", "Medium", "High"])
+
+# Threshold
+th = st.slider("Decision threshold (for classification)", 0.0, 1.0, 0.50, 0.01)
+
+# Map widget values to the pipeline's expected raw column names
+values = {
+    "Age": age,
+    "Attendance (%)": attendance,
+    "Midterm_Score": midterm,
+    "Assignments_Avg": assignments,
+    "Quizzes_Avg": quizzes,
+    "Participation_Score": participation,
+    "Projects_Score": projects,
+    "Study_Hours_per_Week": study_hours,
+    "Stress_Level (1-10)": stress,
+    "Sleep_Hours_per_Night": sleep,
+    "Gender": gender,
+    "Department": dept,
+    "Extracurricular_Activities": extra,
+    "Internet_Access_at_Home": internet,
+    "Parent_Education_Level": parent_edu,
+    "Family_Income_Level": income,
+    # Intentionally **exclude** Grade/Total_Score/Final_Score etc. if they were dropped during training.
+}
+
+X_input = build_input_row(RAW_COLS, values)
+
+if st.button("Predict"):
+    try:
+        proba = model.predict_proba(X_input)[0, 1]
+    except Exception as e:
+        st.error(f"Prediction failed. Check that widget names match training columns.\n\n{e}")
+    else:
+        show_result(proba, th)
+
+# ---------- Batch prediction ----------
+st.subheader("Batch Prediction (CSV)")
+st.caption("Upload a CSV with the same **raw** column names used in training (any missing columns will be filled with NaN).")
+
+csv = st.file_uploader("Upload CSV", type=["csv"])
+if csv is not None:
+    try:
+        df_up = pd.read_csv(csv)
+        # Align to RAW_COLS (extra cols are dropped, missing become NaN)
+        df_aligned = pd.DataFrame([{c: row.get(c, np.nan) for c in RAW_COLS} for _, row in df_up.to_dict(orient="records")],
+                                  columns=RAW_COLS)
+        probs = model.predict_proba(df_aligned)[:, 1]
+        preds = (probs >= th).astype(int)
+        out = df_up.copy()
+        out["dropout_probability"] = probs
+        out["predicted_class"] = np.where(preds == 1, "Dropout", "No Dropout")
+        st.write(out.head())
+        st.download_button("Download Predictions CSV",
+                           data=out.to_csv(index=False).encode("utf-8"),
+                           file_name="predictions.csv",
+                           mime="text/csv")
+    except Exception as e:
+        st.error(f"Batch prediction failed: {e}")
+
+st.caption("© Your Team — Logistic Regression Pipeline")
+
     LOADER = "joblib"
 except Exception:
     import pickle
@@ -463,3 +616,4 @@ with st.expander("📥 Batch predictions from CSV"):
                                file_name="predictions.csv", mime="text/csv")
         except Exception as e:
             st.error(f"Batch prediction failed: {e}")
+
